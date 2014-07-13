@@ -5,6 +5,18 @@ import shutil
 import sys
 
 class UnObsolizer:
+    """
+    Creates a list of files to parse based on command line arguments.
+
+    This class is not required to have parsing done, it simply compiles a list
+    of files to operate on, and then creates a ``FileParser`` for each
+    file.
+
+    Usage:
+      unob = UnObsolizer()
+      unob.get_files_from_args()
+      unob.parse_files()
+    """
 
     def __init__(self):
         self.files = []
@@ -31,8 +43,8 @@ class UnObsolizer:
         user specified recursive or directory mode. Appends all found files
         to 'self.files'.
 
-        Keyword arguments:
-        only_current_dir -- do not recurse into all other directories
+        Args:
+        only_current_dir (bool): do not recurse into all other directories
         """
         for (dirpath, dirnames, filenames) in os.walk(os.getcwd()):
             for f in filenames:
@@ -45,8 +57,8 @@ class UnObsolizer:
         Handle parsing arguments from the command line
 
         Returns:
-        parser.Namespace -- contains values for 'recurse', 'directory',
-        and 'file' options
+        parser.Namespace: contains values for 'recurse', 'directory', and 'file'
+          options
         """
         parser = argparse.ArgumentParser(description="Convert some C code.")
         parser.add_argument(
@@ -63,11 +75,16 @@ class UnObsolizer:
         return parser.parse_args()
 
     def parse_files(self):
+        """
+        Triggers the parsing process for all files in the list 'self.files'.
+        Useful if you wish to add files manually before starting the process.
+        """
         for f in self.files:
             parser = FileParser(f)
 
 class FileParser:
 
+    # Parser states
     SEARCH_FOR_FUNC = 1
     READ_ARGUMENTS = 2
     REPLACE_FUNCTION = 3
@@ -85,32 +102,53 @@ class FileParser:
     function_begin_re = re.compile(r'\s*\{\s*$')
 
     def __init__(self, file_name):
-        self.file_name = file_name
+        """
+        Initializes and tells the parser to operate on 'file_name'.
+        No action is required other than initializing this class; the parsing
+        process is automatically initiated.
+        A backup file is saved in 'file_name.bak'; just in-case the program
+        explodes.
+
+        Args:
+        file_name (string): the file to operate on
+        """
         self.current_state = FileParser.SEARCH_FOR_FUNC
-        self.accumulated_lines = []
-        self.function_decl = ''
+        self.function_name = ''
         self.function_args = []
-        self.function_ret_type = ''
         self.previous_line = ''
-        self.num_function_args = 0
+        self.function_args_count = 0
 
         # Save original file in case of disaster
-        shutil.copyfile(file_name, file_name + '.bak')
-        self.output_file = open(self.file_name, 'w+')
+        backup_file = file_name + '.bak'
+        shutil.copyfile(file_name, backup_file)
+        self.output_file = open(file_name, 'w+')
+        self.input_file = open(backup_file, 'r')
 
         # This is pass #0
         self.operate_on_file(self.function_converter)
 
-        print('init:', file_name)
-
     def operate_on_file(self, handle):
-        file_ = open(self.file_name + '.bak', 'r')
-        for line in file_:
+        """
+        Calls the passed in function on every line of 'input file'.
+        There will be two passes on the file, so this is useful to avoid
+        redundant code.
+
+        Args:
+        handle (function(string)): the function to call for every line of the
+          file (takes the line of the file as an argument)
+        """
+        for line in self.input_file:
             handle(line)
             self.previous_line = line
 
     def function_converter(self, line):
+        """
+        The main state handler for the function-converter.
+        Passes 'line' onto the proper function depending on the current state.
 
+        Args:
+        line (string): the current string to be processing
+        """
         if self.current_state is FileParser.SEARCH_FOR_FUNC:
             self.search_for_func(line)
         elif self.current_state is FileParser.READ_ARGUMENTS:
@@ -119,41 +157,33 @@ class FileParser:
             self.replace_function(line)
 
     def search_for_func(self, line):
+        """
+        Searches 'line' for a function declaration of the form:
+        '[name]([arg], [arg])'.
 
+        Args:
+        line (string): the string to search for a function in
 
+        Modified instance variables:
+        function_decl: will contain the name of the function (if one is found)
+        current_state: set to the proper next state based on the # of
+          arguments expected
+        function_args_count: set to the expected number of arguments
+        """
         func_name_match = re.search(self.function_name_re, line)
         if func_name_match:
-            print('found an old function delcaration')
-            print("\tname:", func_name_match.group('name'))
-            print("\targuments:", func_name_match.group('args'))
-            print("checking previous line for return value")
+            # Grab expected number of arguments
             if func_name_match.group('args'):
-                self.num_function_args = len(
+                self.function_args_count = len(
                     func_name_match.group('args').split(','))
-            print('num args: ', self.num_function_args)
-            ret_value_match = re.search(
-                self.return_value_re, self.previous_line)
-            if ret_value_match:
-                self.accumulated_lines.append(self.previous_line)
-                print('found return value: ')
-                print('\tstatic: ', ret_value_match.group('static'))
-                print('\tret_val: ', ret_value_match.group('retval'))
-                print('\tpointer: ', ret_value_match.group('pointer'))
-                if ret_value_match.group('static'):
-                    self.function_decl += 'static '
-                self.function_decl += ret_value_match.group('retval') + ' '
-                if ret_value_match.group('pointer'):
-                    self.function_decl += '*'
-            else:
-                self.function_decl = 'void '
-                print('no return value found... defaulting to void')
+
+            # Use 'void' if there is no return value
+            ret_value_match = re.search(self.return_value_re,
+                                        self.previous_line)
+            if not ret_value_match:
                 self.output_file.write('void\n')
-
-            self.function_decl = func_name_match.group('name')
-
-            print('function delc: ', self.function_decl)
-            print('--------------------')
-            if self.num_function_args is 0:
+            self.function_name = func_name_match.group('name')
+            if self.function_args_count is 0:
                 self.current_state = FileParser.REPLACE_FUNCTION
             else:
                 self.current_state = FileParser.READ_ARGUMENTS
@@ -161,61 +191,67 @@ class FileParser:
              self.output_file.write(line)
              self.reset_state()
 
-
-
     def read_arguments(self, line):
+        """
+        Reads the arguments that follow the function declaration. Stores
+        them in a tuple for re-writing later.
 
+        Args:
+        line (string): the string to search for an argument in
+
+        Modified instance variables:
+        function_args: add found argument tuples to the list
+        current_state: set to next state when all arguments have been found
+        """
         arg_match = re.search(self.function_arg_re, line)
         if arg_match:
             arg_type = arg_match.group('type')
             arg_name = arg_match.group('name')
             arg_ptr = True if arg_match.group('pointer') else False
             self.function_args.append((arg_type, arg_name, arg_ptr))
-
-        if len(self.function_args) is self.num_function_args:
-            print('found all arguments')
-            print("found arg: ", self.function_args)
+        if len(self.function_args) is self.function_args_count:
             self.current_state = FileParser.REPLACE_FUNCTION
 
     def replace_function(self, line):
+        """
+        Replaces the obsolete function header with the new one built from
+        the function name and the argument tuples. Then resets the state
+        machine.
 
+        Args:
+        line (string): the line containing the opening brace of the function
+        """
         open_curley_match = re.search(self.function_begin_re, line)
         if open_curley_match:
-#            import pdb; pdb.set_trace()
-
-            print('time to replace function', self.accumulated_lines)
-            self.function_decl += '('
-
+            function_declaration = self.function_name
+            function_declaration += '('
             index = 1
             for arg in self.function_args:
-                self.function_decl += arg[0]
-                self.function_decl += '* ' if arg[2] else ' '
-                self.function_decl += arg[1]
+                function_declaration += arg[0]
+                function_declaration += '* ' if arg[2] else ' '
+                function_declaration += arg[1]
                 if index < len(self.function_args):
-                    self.function_decl += ', '
+                    function_declaration += ', '
                 index += 1
-
-            self.function_decl += ')\n'
-            print('with:', self.function_decl)
-            self.output_file.write(self.function_decl)
+            function_declaration += ')\n'
+            self.output_file.write(function_declaration)
             self.output_file.write(line)
 
         self.reset_state()
 
-    def print_accumulated_lines(self):
-        self.output_file.writelines(self.accumulated_lines)
-
     def reset_state(self):
+        """
+        Resets the state machine to its default values.
+        """
         self.current_state = FileParser.SEARCH_FOR_FUNC
         self.accumulated_lines = []
-        self.function_decl = ''
+        self.function_name = ''
         self.function_args = []
         self.function_ret_type = ''
-        self.num_function_args = 0
+        self.function_args_count = 0
 
 
 if __name__ == '__main__':
     unob = UnObsolizer()
     unob.get_files_from_args()
-    print('files to visit:', unob.files)
     unob.parse_files()
