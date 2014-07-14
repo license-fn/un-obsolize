@@ -127,14 +127,21 @@ class FileParser:
         backup_file = file_name + '.bak'
         shutil.copyfile(file_name, backup_file)
         self.output_file = open(file_name, 'w+')
-        self.input_file = open(backup_file, 'r')
 
         # This is pass #0
         self.operate_on_file(backup_file, self.function_converter)
         print('function_dict:', self.function_dict)
 
+        # Close the output file and make a temp copy
+        self.output_file.close()
+        temp_output = file_name + '.tmp'
+        shutil.copyfile(file_name, temp_output)
+        self.output_file = open(file_name, 'w+')
+
         # This is pass #2 (needs to operate on output file)
-        self.operate_on_file(backup_file, self.declaration_converter)
+        self.operate_on_file(temp_output, self.declaration_converter)
+        self.output_file.close()
+
 
     def declaration_converter(self, line):
         forward_decl_match = re.search(self.forward_declaration_re, line)
@@ -159,9 +166,9 @@ class FileParser:
             print('\t takes args:', self.function_dict[func_name])
             repl = re.sub('\((.*)\)', '(' + new_forward_decl_args + ')', line)
             print('\t replace w/:', repl)
+            self.output_file.write(repl)
         else:
-            pass
-            # output line
+            self.output_file.write(line)
 
     def operate_on_file(self, file_name, handle):
         """
