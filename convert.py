@@ -181,7 +181,7 @@ class FileParser:
             ret_value_match = re.search(self.return_value_re,
                                         self.previous_line)
             if not ret_value_match:
-                self.output_file.write('void\n')
+                self.output_file.write('int\n')
             self.function_name = func_name_match.group('name')
             if self.function_args_count is 0:
                 self.current_state = FileParser.REPLACE_FUNCTION
