@@ -101,6 +101,10 @@ class FileParser:
         r'(?P<name>\S+)\s*;\s*$')
     function_begin_re = re.compile(r'\s*\{\s*$')
 
+    forward_declaration_re = re.compile(
+        r'^\s*(?P<type>[a-zA-Z_][a-zA-Z0-9_]*)?\s*\*?\s*'
+        '(?P<name>[a-zA-Z_][a-zA-Z0-9_]*)\s*\(\s*\)\s*;\s*$')
+
     def __init__(self, file_name):
         """
         Initializes and tells the parser to operate on 'file_name'.
@@ -117,6 +121,7 @@ class FileParser:
         self.function_args = []
         self.previous_line = ''
         self.function_args_count = 0
+        self.function_dict = {}
 
         # Save original file in case of disaster
         backup_file = file_name + '.bak'
@@ -125,19 +130,52 @@ class FileParser:
         self.input_file = open(backup_file, 'r')
 
         # This is pass #0
-        self.operate_on_file(self.function_converter)
+        self.operate_on_file(backup_file, self.function_converter)
+        print('function_dict:', self.function_dict)
 
-    def operate_on_file(self, handle):
+        # This is pass #2 (needs to operate on output file)
+        self.operate_on_file(backup_file, self.declaration_converter)
+
+    def declaration_converter(self, line):
+        forward_decl_match = re.search(self.forward_declaration_re, line)
+        if forward_decl_match:
+            new_forward_decl_args = ''
+            func_name = forward_decl_match.group('name')
+            args_tuple_list = self.function_dict[func_name]
+            index = 1
+            for arg_tuple in args_tuple_list:
+                new_forward_decl_args += arg_tuple[0]
+                if arg_tuple[2]:
+                    new_forward_decl_args += '* '
+                else:
+                    new_forward_decl_args += ' '
+                new_forward_decl_args += arg_tuple[1]
+                if index < len(args_tuple_list):
+                    new_forward_decl_args += ', '
+                index += 1
+
+
+            print("forwrad decl match:", func_name)
+            print('\t takes args:', self.function_dict[func_name])
+            repl = re.sub('\((.*)\)', '(' + new_forward_decl_args + ')', line)
+            print('\t replace w/:', repl)
+        else:
+            pass
+            # output line
+
+    def operate_on_file(self, file_name, handle):
         """
-        Calls the passed in function on every line of 'input file'.
+        Calls the passed in function on every line of the specified file.
         There will be two passes on the file, so this is useful to avoid
         redundant code.
 
         Args:
+        file_name (string): name of the file to read
         handle (function(string)): the function to call for every line of the
           file (takes the line of the file as an argument)
         """
-        for line in self.input_file:
+        file_ = open(file_name, 'r')
+        for line in file_:
             handle(line)
             self.previous_line = line
 
@@ -236,6 +274,7 @@ class FileParser:
             function_declaration += ')\n'
             self.output_file.write(function_declaration)
             self.output_file.write(line)
+            self.function_dict[self.function_name] = self.function_args
 
         self.reset_state()
 
