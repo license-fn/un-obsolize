@@ -4,7 +4,7 @@ import re
 import shutil
 import sys
 
-class UnObsolizer:
+class UnObsolizer(object):
     """
     Creates a list of files to parse based on command line arguments.
 
@@ -18,6 +18,7 @@ class UnObsolizer:
       unob.parse_files()
     """
     prompt_confirmation = True
+    new_extension = None
 
     def __init__(self):
         self.files = []
@@ -29,6 +30,7 @@ class UnObsolizer:
         """
         args = self.parse_arguments()
         UnObsolizer.prompt_confirmation = args.confirm
+        UnObsolizer.new_extension = args.new_ext
 
         # Gather files to visit if [-d/-r]
         self.files.extend([os.path.join(os.getcwd(), f) for f in args.files])
@@ -67,18 +69,21 @@ class UnObsolizer:
         parser.add_argument(
             '-r', dest='recurse', action='store_const', const=True,
             default=False,
-            help=('recurse and operate on all files in the current and'
+            help=('Recurse and operate on all files in the current and'
                   ' sub-directories (implies -d)'))
         parser.add_argument(
             '-d', dest='directory', action='store_const', const=True,
-            default=False, help='operate on all files in the current directory')
+            default=False, help='Operate on all files in the current directory')
         parser.add_argument(
             'files', metavar='file', nargs='*',
             help='Files to operate on. Optional if [-r/-d] is applied')
         parser.add_argument(
             '-xc', dest='confirm', action='store_const', const=False,
-            default=True, help='do not prompt for confirmation')
-
+            default=True, help='Do not prompt for confirmation')
+        parser.add_argument(
+            '--ext', dest='new_ext', action='store', default=None,
+            help=('Specify a new file extension to change the converted files '
+                  'to. Useful when converting from *.c to *.cpp'))
         return parser.parse_args()
 
     def parse_files(self):
@@ -89,7 +94,7 @@ class UnObsolizer:
         for f in self.files:
             parser = FileParser(f)
 
-class FileParser:
+class FileParser(object):
 
     # Parser states
     SEARCH_FOR_FUNC = 1
@@ -110,6 +115,8 @@ class FileParser:
     forward_declaration_re = re.compile(
         r'^\s*(?P<type>[a-zA-Z_][a-zA-Z0-9_]*)?\s*\*?\s*'
         '(?P<name>[a-zA-Z_][a-zA-Z0-9_]*)\s*\(\s*\)\s*;\s*$')
+    file_ext_re = re.compile(
+        r'(?P<name>.*)\.[0-9a-zA-Z]+$')
 
     def __init__(self, file_name):
         """
@@ -129,25 +136,31 @@ class FileParser:
         self.function_args_count = 0
         self.function_dict = {}
         self.accumulated_lines = []
-
+        
         # Save original file in case of disaster
-        backup_file = file_name + '.bak'
-        temp_file = file_name + '.tmp'
-        shutil.copyfile(file_name, backup_file)
-        self.output_file = open(file_name, 'w+')
+        backup_file_name = file_name + '.bak'
+        temp_file_name = file_name + '.tmp'
+        output_file_name = file_name
+        if UnObsolizer.new_extension:
+            no_ext_name = re.search(FileParser.file_ext_re, file_name)
+            if no_ext_name:
+                print(no_ext_name.group('name'), UnObsolizer.new_extension)
+                output_file_name = (no_ext_name.group('name') + '.' +
+                                    UnObsolizer.new_extension)
+        print(output_file_name)
+        shutil.copyfile(file_name, backup_file_name)
+        self.output_file = open(output_file_name, 'w+')
 
         # This is pass #0
-        self.operate_on_file(backup_file, self.function_converter)
+        self.operate_on_file(backup_file_name, self.function_converter)
         self.output_file.close()
+        shutil.copyfile(output_file_name, temp_file_name)
+        self.output_file = open(output_file_name, 'w+')
 
-        # Copy the output file to read for pass #2
-        shutil.copyfile(file_name, temp_file)
-        self.output_file = open(file_name, 'w+')
-
-        # Do pass #2 reading the temp file
-        self.operate_on_file(temp_file, self.declaration_converter)
+        # Do pass #2 reading the new (copied to temp) file
+        self.operate_on_file(temp_file_name, self.declaration_converter)
         self.output_file.close()
-        os.remove(temp_file)
+        os.remove(temp_file_name)
 
     def operate_on_file(self, file_name, handle):
         """
@@ -195,16 +208,15 @@ class FileParser:
           arguments expected
         function_args_count: set to the expected number of arguments
         """
-        func_name_match = re.search(self.function_name_re, line)
+        func_name_match = re.search(FileParser.function_name_re, line)
         if func_name_match:
             self.accumulated_lines.append(line)
             # Grab expected number of arguments
             if func_name_match.group('args'):
                 self.function_args_count = len(
                     func_name_match.group('args').split(','))
-
             # Use 'void' if there is no return value
-            ret_value_match = re.search(self.return_value_re,
+            ret_value_match = re.search(FileParser.return_value_re,
                                         self.previous_line)
             if not ret_value_match:
                 self.output_file.write('int\n')
@@ -230,7 +242,7 @@ class FileParser:
         current_state: set to next state when all arguments have been found
         """
         self.accumulated_lines.append(line)
-        arg_match = re.search(self.function_arg_re, line)
+        arg_match = re.search(FileParser.function_arg_re, line)
         if arg_match:
             arg_type = arg_match.group('type')
             arg_name = arg_match.group('name')
@@ -248,7 +260,7 @@ class FileParser:
         Args:
         line (string): the line containing the opening brace of the function
         """
-        open_curley_match = re.search(self.function_begin_re, line)
+        open_curley_match = re.search(FileParser.function_begin_re, line)
         if open_curley_match:
             function_declaration = self.function_name
             function_declaration += '('
@@ -299,17 +311,15 @@ class FileParser:
         Args:
         line (string): The line to scan for a forward declaration
         """
-        forward_decl_match = re.search(self.forward_declaration_re, line)
+        forward_decl_match = re.search(FileParser.forward_declaration_re, line)
         if forward_decl_match:
-            func_name = forward_decl_match.group('name')
-
             # Ensure we have arguments for this forward declaration
+            func_name = forward_decl_match.group('name')
             try:
                 args_tuple_list = self.function_dict[func_name]
             except KeyError:
                 self.output_file.write(line)
                 return
-           
             new_forward_decl_args = ''
             index = 1
             for arg_tuple in args_tuple_list:
