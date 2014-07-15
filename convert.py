@@ -125,50 +125,20 @@ class FileParser:
 
         # Save original file in case of disaster
         backup_file = file_name + '.bak'
+        temp_file = file_name + '.tmp'
         shutil.copyfile(file_name, backup_file)
         self.output_file = open(file_name, 'w+')
 
         # This is pass #0
         self.operate_on_file(backup_file, self.function_converter)
-        print('function_dict:', self.function_dict)
-
-        # Close the output file and make a temp copy
         self.output_file.close()
-        temp_output = file_name + '.tmp'
-        shutil.copyfile(file_name, temp_output)
+        # Copy the output file form pass #2
+        shutil.copyfile(file_name, temp_file)
         self.output_file = open(file_name, 'w+')
-
         # This is pass #2 (needs to operate on output file)
-        self.operate_on_file(temp_output, self.declaration_converter)
+        self.operate_on_file(temp_file, self.declaration_converter)
         self.output_file.close()
-
-
-    def declaration_converter(self, line):
-        forward_decl_match = re.search(self.forward_declaration_re, line)
-        if forward_decl_match:
-            new_forward_decl_args = ''
-            func_name = forward_decl_match.group('name')
-            args_tuple_list = self.function_dict[func_name]
-            index = 1
-            for arg_tuple in args_tuple_list:
-                new_forward_decl_args += arg_tuple[0]
-                if arg_tuple[2]:
-                    new_forward_decl_args += '* '
-                else:
-                    new_forward_decl_args += ' '
-                new_forward_decl_args += arg_tuple[1]
-                if index < len(args_tuple_list):
-                    new_forward_decl_args += ', '
-                index += 1
-
-
-            print("forwrad decl match:", func_name)
-            print('\t takes args:', self.function_dict[func_name])
-            repl = re.sub('\((.*)\)', '(' + new_forward_decl_args + ')', line)
-            print('\t replace w/:', repl)
-            self.output_file.write(repl)
-        else:
-            self.output_file.write(line)
+        os.remove(temp_file)
 
     def operate_on_file(self, file_name, handle):
         """
@@ -185,6 +155,7 @@ class FileParser:
         for line in file_:
             handle(line)
             self.previous_line = line
+        file_.close()
 
     def function_converter(self, line):
         """
@@ -295,6 +266,42 @@ class FileParser:
         self.function_args = []
         self.function_ret_type = ''
         self.function_args_count = 0
+
+    def declaration_converter(self, line):
+        """
+        Scans the line for a forward declaration. If an empty forward
+        delcaration exists, and we have un-obsolized the function
+        then we fill in the forward delcaration with the expected arguments.
+
+        Args:
+        line (string): The line to scan for a forward declaration
+        """
+        forward_decl_match = re.search(self.forward_declaration_re, line)
+        if forward_decl_match:
+            func_name = forward_decl_match.group('name')
+            # Ensure we have arguments for this forward declaration
+            try:
+                args_tuple_list = self.function_dict[func_name]
+            except KeyError:
+                self.output_file.write(line)
+                return
+           
+            new_forward_decl_args = ''
+            index = 1
+            for arg_tuple in args_tuple_list:
+                new_forward_decl_args += arg_tuple[0]
+                if arg_tuple[2]:
+                    new_forward_decl_args += '* '
+                else:
+                    new_forward_decl_args += ' '
+                new_forward_decl_args += arg_tuple[1]
+                if index < len(args_tuple_list):
+                    new_forward_decl_args += ', '
+                index += 1
+            repl = re.sub('\((.*)\)', '(' + new_forward_decl_args + ')', line)
+            self.output_file.write(repl)
+        else:
+            self.output_file.write(line)
 
 
 if __name__ == '__main__':
