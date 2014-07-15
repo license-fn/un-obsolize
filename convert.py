@@ -17,6 +17,7 @@ class UnObsolizer:
       unob.get_files_from_args()
       unob.parse_files()
     """
+    prompt_confirmation = True
 
     def __init__(self):
         self.files = []
@@ -27,11 +28,13 @@ class UnObsolizer:
         the arguments given on the command line.
         """
         args = self.parse_arguments()
-        self.files.extend([os.path.join(os.getcwd(), f) for f in args.files])
+        UnObsolizer.prompt_confirmation = args.confirm
 
+        # Gather files to visit if [-d/-r]
+        self.files.extend([os.path.join(os.getcwd(), f) for f in args.files])
         if args.recurse or args.directory:
             self.append_directory_files(
-                only_current_dir=(not args.recurse))
+                only_current_dir=not args.recurse)
 
         # Filter files to ensure *.c
         c_file_regex = re.compile(r'\S+\.c$')
@@ -64,13 +67,17 @@ class UnObsolizer:
         parser.add_argument(
             '-r', dest='recurse', action='store_const', const=True,
             default=False,
-            help='recurse and operate on sub-directories (implies -d)')
+            help=('recurse and operate on all files in the current and'
+                  ' sub-directories (implies -d)'))
         parser.add_argument(
             '-d', dest='directory', action='store_const', const=True,
-            default=False, help='operate on the current directory')
+            default=False, help='operate on all files in the current directory')
         parser.add_argument(
             'files', metavar='file', nargs='*',
             help='Files to operate on. Optional if [-r/-d] is applied')
+        parser.add_argument(
+            '-xc', dest='confirm', action='store_const', const=False,
+            default=True, help='do not prompt for confirmation')
 
         return parser.parse_args()
 
@@ -100,7 +107,6 @@ class FileParser:
         r'^\s*(?P<type>[a-zA-Z_][a-zA-Z0-9_]*)\s*(?P<pointer>\*)?\s*'
         r'(?P<name>\S+)\s*;\s*$')
     function_begin_re = re.compile(r'\s*\{\s*$')
-
     forward_declaration_re = re.compile(
         r'^\s*(?P<type>[a-zA-Z_][a-zA-Z0-9_]*)?\s*\*?\s*'
         '(?P<name>[a-zA-Z_][a-zA-Z0-9_]*)\s*\(\s*\)\s*;\s*$')
@@ -122,6 +128,7 @@ class FileParser:
         self.previous_line = ''
         self.function_args_count = 0
         self.function_dict = {}
+        self.accumulated_lines = []
 
         # Save original file in case of disaster
         backup_file = file_name + '.bak'
@@ -132,10 +139,12 @@ class FileParser:
         # This is pass #0
         self.operate_on_file(backup_file, self.function_converter)
         self.output_file.close()
-        # Copy the output file form pass #2
+
+        # Copy the output file to read for pass #2
         shutil.copyfile(file_name, temp_file)
         self.output_file = open(file_name, 'w+')
-        # This is pass #2 (needs to operate on output file)
+
+        # Do pass #2 reading the temp file
         self.operate_on_file(temp_file, self.declaration_converter)
         self.output_file.close()
         os.remove(temp_file)
@@ -188,6 +197,7 @@ class FileParser:
         """
         func_name_match = re.search(self.function_name_re, line)
         if func_name_match:
+            self.accumulated_lines.append(line)
             # Grab expected number of arguments
             if func_name_match.group('args'):
                 self.function_args_count = len(
@@ -219,6 +229,7 @@ class FileParser:
         function_args: add found argument tuples to the list
         current_state: set to next state when all arguments have been found
         """
+        self.accumulated_lines.append(line)
         arg_match = re.search(self.function_arg_re, line)
         if arg_match:
             arg_type = arg_match.group('type')
@@ -250,10 +261,22 @@ class FileParser:
                     function_declaration += ', '
                 index += 1
             function_declaration += ')\n'
-            self.output_file.write(function_declaration)
-            self.output_file.write(line)
-            self.function_dict[self.function_name] = self.function_args
 
+            # Prompt for confirmation (if specified)
+            confirmation = 'y'
+            if UnObsolizer.prompt_confirmation:
+                print('Replace?\n')
+                for al in self.accumulated_lines:
+                    print(al.rstrip('\n'))
+                print('--with--')
+                print(function_declaration)
+                confirmation = input('y/n [y]')
+            if confirmation is 'n':
+                self.output_file.writelines(self.accumulated_lines)
+            else:
+                self.output_file.write(function_declaration)
+                self.function_dict[self.function_name] = self.function_args
+            self.output_file.write(line)
         self.reset_state()
 
     def reset_state(self):
@@ -279,6 +302,7 @@ class FileParser:
         forward_decl_match = re.search(self.forward_declaration_re, line)
         if forward_decl_match:
             func_name = forward_decl_match.group('name')
+
             # Ensure we have arguments for this forward declaration
             try:
                 args_tuple_list = self.function_dict[func_name]
@@ -299,7 +323,19 @@ class FileParser:
                     new_forward_decl_args += ', '
                 index += 1
             repl = re.sub('\((.*)\)', '(' + new_forward_decl_args + ')', line)
-            self.output_file.write(repl)
+
+            # Prompt for confirmation
+            confirmation = 'y'
+            if UnObsolizer.prompt_confirmation:
+                print('Replace?\n')
+                print(line.rstrip('\n'))
+                print('--with--')
+                print(repl)
+                confirmation = input('y/n [y]')
+            if confirmation is 'n':
+                self.output_file.write(line)
+            else:
+                self.output_file.write(repl)
         else:
             self.output_file.write(line)
 
