@@ -140,16 +140,16 @@ class FileParser(object):
         self.accumulated_lines = []
 
         # Save original file in case of disaster
-        backup_file_name = file_name + '.bak'
-        temp_file_name = file_name + '.tmp'
+        backup_file_name = '{}.bak'.format(file_name)
+        temp_file_name = '{}.tmp'.format(file_name)
         output_file_name = file_name
         if UnObsolizer.new_extension:
             no_ext_name = re.search(FileParser.file_ext_re, file_name)
             if no_ext_name:
                 print(no_ext_name.group('name'), UnObsolizer.new_extension)
-                output_file_name = (no_ext_name.group('name') + '.' +
-                                    UnObsolizer.new_extension)
-        print(output_file_name)
+                output_file_name = '{}.{}'.format(
+                    no_ext_name.group('name'),
+                    UnObsolizer.new_extension)
         shutil.copyfile(file_name, backup_file_name)
         self.output_file = open(output_file_name, 'w+')
 
@@ -268,15 +268,14 @@ class FileParser(object):
             function_declaration += '('
             index = 1
             for arg in self.function_args:
-                function_declaration += arg[0]
-                function_declaration += '* ' if arg[2] else ' '
-                function_declaration += arg[1]
+                function_declaration += '{}{} {}'.format(
+                    arg[0],
+                    '*' if arg[2] else '',
+                    arg[1])
                 if index < len(self.function_args):
                     function_declaration += ', '
                 index += 1
             function_declaration += ')\n'
-
-            # Prompt for confirmation (if specified)
             confirmation = 'y'
             if UnObsolizer.prompt_confirmation:
                 print('Replace?\n')
@@ -334,9 +333,10 @@ class FileParser(object):
                 if index < len(args_tuple_list):
                     new_forward_decl_args += ', '
                 index += 1
-            repl = re.sub('\((.*)\)', '(' + new_forward_decl_args + ')', line)
-
-            # Prompt for confirmation
+            repl = re.sub(
+                '\((.*)\)',
+                '({})'.format(new_forward_decl_args),
+                line)
             confirmation = 'y'
             if UnObsolizer.prompt_confirmation:
                 print('Replace?\n')
