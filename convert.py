@@ -32,18 +32,15 @@ class UnObsolizer(object):
         UnObsolizer.prompt_confirmation = args.confirm
         UnObsolizer.new_extension = args.new_ext
 
-        # Gather files to visit if [-d/-r]
-        self.files.extend([os.path.join(os.getcwd(), f) for f in args.files])
         if args.recurse or args.directory:
             self.append_directory_files(
                 only_current_dir=not args.recurse)
-
-        # Filter files to ensure *.c
-        c_file_regex = re.compile(r'\S+\.c$')
-        self.files = [ f for f in self.files if (re.search(c_file_regex, f)) ]
+        input_file_re = re.compile(args.input_re)
+        self.files = [ f for f in self.files if (re.search(input_file_re, f)) ]
+        self.files.extend([os.path.join(os.getcwd(), f) for f in args.files])
 
     def append_directory_files(self, only_current_dir):
-        """ 
+        """
         Walk through directories and record the files we need to visit if the
         user specified recursive or directory mode. Appends all found files
         to 'self.files'.
@@ -84,6 +81,11 @@ class UnObsolizer(object):
             '--ext', dest='new_ext', action='store', default=None,
             help=('Specify a new file extension to change the converted files '
                   'to. Useful when converting from *.c to *.cpp'))
+        parser.add_argument(
+            '--re', dest='input_re', action='store', default=r'\S+\.c$',
+            help=(r'Specify a Python regex to filter the files that are '
+                  r'found with [-d/-r]. '
+                  r'Default is `\S+\.c$`, which will usually match *.c files.'))
         return parser.parse_args()
 
     def parse_files(self):
@@ -136,7 +138,7 @@ class FileParser(object):
         self.function_args_count = 0
         self.function_dict = {}
         self.accumulated_lines = []
-        
+
         # Save original file in case of disaster
         backup_file_name = file_name + '.bak'
         temp_file_name = file_name + '.tmp'
