@@ -178,9 +178,14 @@ class FileParser(object):
         os.remove(temp_file_name)
         if UnObsolizer.new_extension:
             os.remove(input_file_name)
-        if UnObsolizer.git_move:
-            shutil.copyfile(output_file_name, input_file_name)
-            subprocess.call(['git', 'mv', input_file_name, output_file_name])
+            if UnObsolizer.git_move:
+                shutil.move(output_file_name, input_file_name)
+                ret_val = subprocess.call(
+                    ['git', 'mv', input_file_name, output_file_name])
+                if ret_val:
+                    print('Fatal error while performing `git mv`. '
+                          'Exiting')
+                    exit(1)
 
     def operate_on_file(self, file_name, handle):
         """
