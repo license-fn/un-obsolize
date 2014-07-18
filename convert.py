@@ -119,6 +119,8 @@ class FileParser(object):
         '(?P<name>[a-zA-Z_][a-zA-Z0-9_]*)\s*\(\s*\)\s*;\s*$')
     file_ext_re = re.compile(
         r'(?P<name>.*)\.[0-9a-zA-Z]+$')
+    whitespace_re = re.compile(
+        r'^\s*$')
 
     def __init__(self, file_name):
         """
@@ -137,6 +139,7 @@ class FileParser(object):
         self.previous_line = ''
         self.function_args_count = 0
         self.function_dict = {}
+        self.function_ret_type = ''
         self.accumulated_lines = []
 
         # Save original file in case of disaster
@@ -189,6 +192,8 @@ class FileParser(object):
         Args:
         line (string): the current string to be processing
         """
+        print('operating on:', line)
+        print('state', self.current_state)
         if self.current_state is FileParser.SEARCH_FOR_FUNC:
             self.search_for_func(line)
         elif self.current_state is FileParser.READ_ARGUMENTS:
@@ -213,15 +218,17 @@ class FileParser(object):
         func_name_match = re.search(FileParser.function_name_re, line)
         if func_name_match:
             self.accumulated_lines.append(line)
+
             # Grab expected number of arguments
             if func_name_match.group('args'):
                 self.function_args_count = len(
                     func_name_match.group('args').split(','))
+
             # Use 'void' if there is no return value
             ret_value_match = re.search(FileParser.return_value_re,
                                         self.previous_line)
             if not ret_value_match:
-                self.output_file.write('int\n')
+                self.function_ret_type = 'int\n'
             self.function_name = func_name_match.group('name')
             if self.function_args_count is 0:
                 self.current_state = FileParser.REPLACE_FUNCTION
@@ -250,8 +257,13 @@ class FileParser(object):
             arg_name = arg_match.group('name')
             arg_ptr = True if arg_match.group('pointer') else False
             self.function_args.append((arg_type, arg_name, arg_ptr))
-        if len(self.function_args) is self.function_args_count:
-            self.current_state = FileParser.REPLACE_FUNCTION
+            if len(self.function_args) is self.function_args_count:
+                self.current_state = FileParser.REPLACE_FUNCTION
+        elif re.search(FileParser.whitespace_re, line):
+            pass
+        else:
+            self.write_accumulator()
+            self.reset_state()
 
     def replace_function(self, line):
         """
@@ -285,12 +297,26 @@ class FileParser(object):
                 print(function_declaration)
                 confirmation = input('y/n [y]')
             if confirmation is 'n':
+                self.output_file.write(self.function_ret_type)
                 self.output_file.writelines(self.accumulated_lines)
             else:
                 self.output_file.write(function_declaration)
                 self.function_dict[self.function_name] = self.function_args
             self.output_file.write(line)
+        elif re.search(FileParser.whitespace_re, line):
+            return
+        else:
+            self.output_file.writelines(self.accumulated_lines)
+            self.output_file.write(line)
         self.reset_state()
+
+    def write_accumulator(self):
+        """
+        Writes the contents of `self.accumulated_lines` to `self.output_file`.
+
+        `self.accumulated_lines' is not modified.
+        """
+        self.output_file.writelines(self.accumulated_lines)
 
     def reset_state(self):
         """
