@@ -2,6 +2,7 @@ import argparse
 import os
 import re
 import shutil
+import subprocess
 import sys
 
 class UnObsolizer(object):
@@ -19,6 +20,7 @@ class UnObsolizer(object):
     """
     prompt_confirmation = True
     new_extension = None
+    git_move = False
 
     def __init__(self):
         self.files = []
@@ -31,6 +33,7 @@ class UnObsolizer(object):
         args = self.parse_arguments()
         UnObsolizer.prompt_confirmation = args.confirm
         UnObsolizer.new_extension = args.new_ext
+        UnObsolizer.git_move = args.git_move
 
         if args.recurse or args.directory:
             self.append_directory_files(
@@ -76,16 +79,24 @@ class UnObsolizer(object):
             help='Files to operate on. Optional if [-r/-d] is applied')
         parser.add_argument(
             '-xc', dest='confirm', action='store_const', const=False,
-            default=True, help='Do not prompt for confirmation')
+            default=True, help=('Do not prompt for confirmation before '
+                                'making a change.'))
         parser.add_argument(
             '--ext', dest='new_ext', action='store', default=None,
             help=('Specify a new file extension to change the converted files '
-                  'to. Useful when converting from *.c to *.cpp'))
+                  'to. Useful when converting from *.c to *.cpp. '
+                  'Example: [--ext cpp]'))
         parser.add_argument(
             '--re', dest='input_re', action='store', default=r'\S+\.c$',
             help=(r'Specify a Python regex to filter the files that are '
                   r'found with [-d/-r]. '
                   r'Default is `\S+\.c$`, which will usually match *.c files.'))
+        parser.add_argument(
+            '-gm', dest='git_move', action='store_const', const=True,
+            default=False,
+            help=(r'Only valid with [--ext]. '
+                  r'When changing file extensions, perform a Git move. '
+                  r'Useful when operating in a Git repository.'))
         return parser.parse_args()
 
     def parse_files(self):
@@ -122,16 +133,16 @@ class FileParser(object):
     whitespace_re = re.compile(
         r'^\s*$')
 
-    def __init__(self, file_name):
+    def __init__(self, input_file_name):
         """
-        Initializes and tells the parser to operate on 'file_name'.
+        Initializes and tells the parser to operate on 'input_file_name'.
         No action is required other than initializing this class; the parsing
         process is automatically initiated.
         A backup file is saved in 'file_name.bak'; just in-case the program
         explodes.
 
         Args:
-        file_name (string): the file to operate on
+        input_file_name (string): the file to operate on
         """
         self.current_state = FileParser.SEARCH_FOR_FUNC
         self.function_name = ''
@@ -143,29 +154,33 @@ class FileParser(object):
         self.accumulated_lines = []
 
         # Save original file in case of disaster
-        backup_file_name = '{}.bak'.format(file_name)
-        temp_file_name = '{}.tmp'.format(file_name)
-        output_file_name = file_name
+        backup_file_name = '{}.bak'.format(input_file_name)
+        temp_file_name = '{}.tmp'.format(input_file_name)
+        output_file_name = input_file_name
         if UnObsolizer.new_extension:
-            no_ext_name = re.search(FileParser.file_ext_re, file_name)
+            no_ext_name = re.search(FileParser.file_ext_re, input_file_name)
             if no_ext_name:
-                print(no_ext_name.group('name'), UnObsolizer.new_extension)
                 output_file_name = '{}.{}'.format(
                     no_ext_name.group('name'),
                     UnObsolizer.new_extension)
-        shutil.copyfile(file_name, backup_file_name)
+        shutil.copyfile(input_file_name, backup_file_name)
         self.output_file = open(output_file_name, 'w+')
 
-        # This is pass #0
+        # This is pass #1
         self.operate_on_file(backup_file_name, self.function_converter)
         self.output_file.close()
         shutil.copyfile(output_file_name, temp_file_name)
-        self.output_file = open(output_file_name, 'w+')
 
         # Do pass #2 reading the new (copied to temp) file
+        self.output_file = open(output_file_name, 'w+')
         self.operate_on_file(temp_file_name, self.declaration_converter)
         self.output_file.close()
         os.remove(temp_file_name)
+        if UnObsolizer.new_extension:
+            os.remove(input_file_name)
+        if UnObsolizer.git_move:
+            shutil.copyfile(output_file_name, input_file_name)
+            subprocess.call(['git', 'mv', input_file_name, output_file_name])
 
     def operate_on_file(self, file_name, handle):
         """
@@ -192,8 +207,6 @@ class FileParser(object):
         Args:
         line (string): the current string to be processing
         """
-        print('operating on:', line)
-        print('state', self.current_state)
         if self.current_state is FileParser.SEARCH_FOR_FUNC:
             self.search_for_func(line)
         elif self.current_state is FileParser.READ_ARGUMENTS:
