@@ -21,9 +21,11 @@ class UnObsolizer(object):
     prompt_confirmation = True
     new_extension = None
     git_move = False
+    global_function_dict = {}
 
     def __init__(self):
         self.files = []
+        self.parsers = []
 
     def get_files_from_args(self):
         """
@@ -41,6 +43,9 @@ class UnObsolizer(object):
         input_file_re = re.compile(args.input_re)
         self.files = [ f for f in self.files if (re.search(input_file_re, f)) ]
         self.files.extend([os.path.join(os.getcwd(), f) for f in args.files])
+
+        for f in self.files:
+            self.parsers.append(FileParser(f))
 
     def append_directory_files(self, only_current_dir):
         """
@@ -102,12 +107,29 @@ class UnObsolizer(object):
     def parse_files(self):
         """
         Triggers the parsing process for all files in the list 'self.files'.
-        Useful if you wish to add files manually before starting the process.
+        First fix function declarations, then forward declarations.
         """
-        for f in self.files:
-            parser = FileParser(f)
+        for p in self.parsers:
+            p.convert_func_decl()
+
+        for p in self.parsers:
+            p.convert_forward_decl()
 
 class FileParser(object):
+    """
+    Represents a parser for a single file. Handles correcting and collecting
+    obsolete function data.
+
+    global function data is stored in UnObsolizer.global_function_dict
+    static function data is stored in self.function_dict
+
+    Sample Usage:
+    parser = FileParser('path/to/file/to/parse')
+    # This method populates the dictionaries
+    parser.convert_func_decl
+    # This method depends on the dictionaries
+    parser.convert_forward_decl
+    """
 
     # Parser states
     SEARCH_FOR_FUNC = 1
@@ -126,8 +148,9 @@ class FileParser(object):
         r'(?P<name>\S+)\s*;\s*$')
     function_begin_re = re.compile(r'\s*\{\s*$')
     forward_declaration_re = re.compile(
-        r'^\s*(?P<type>[a-zA-Z_][a-zA-Z0-9_]*)?\s*\*?\s*'
-        '(?P<name>[a-zA-Z_][a-zA-Z0-9_]*)\s*\(\s*\)\s*;\s*$')
+        r'^\s*(?P<static>static)?\s*(extern)?\s*'
+        r'(?P<type>[a-zA-Z_][a-zA-Z0-9_]*)?\s*\*?\s*'
+        r'(?P<name>[a-zA-Z_][a-zA-Z0-9_]*)\s*\(\s*\)\s*;\s*$')
     file_ext_re = re.compile(
         r'(?P<name>.*)\.[0-9a-zA-Z]+$')
     whitespace_re = re.compile(
@@ -151,37 +174,60 @@ class FileParser(object):
         self.function_args_count = 0
         self.function_dict = {}
         self.function_ret_type = ''
+        self.function_is_global = False
         self.accumulated_lines = []
+        self.input_file_name = input_file_name
 
+    def convert_func_decl(self):
+        """
+        Read through self.input_file_name and replace all obsolete function
+        declarations. Note that this method writes to a temporary file `*.tmp`
+        and not to the final output file. You must call `convert_forward_decl`
+        after this method to create the proper output file.
+
+        This method creates a backup file `*.bak` in case of disaster.
+
+        Stores all converted static functions in self.function_dict, and all
+        converted global functions in UnObsolizer.global_function_dict.
+        """
         # Save original file in case of disaster
-        backup_file_name = '{}.bak'.format(input_file_name)
-        temp_file_name = '{}.tmp'.format(input_file_name)
-        output_file_name = input_file_name
+        backup_file_name = '{}.bak'.format(self.input_file_name)
+        self.temp_file_name = '{}.tmp'.format(self.input_file_name)
+        self.output_file_name = self.input_file_name
         if UnObsolizer.new_extension:
-            no_ext_name = re.search(FileParser.file_ext_re, input_file_name)
+            no_ext_name = re.search(FileParser.file_ext_re,
+                                    self.input_file_name)
             if no_ext_name:
-                output_file_name = '{}.{}'.format(
+                self.output_file_name = '{}.{}'.format(
                     no_ext_name.group('name'),
                     UnObsolizer.new_extension)
-        shutil.copyfile(input_file_name, backup_file_name)
-        self.output_file = open(output_file_name, 'w+')
-
-        # This is pass #1
+        shutil.copyfile(self.input_file_name, backup_file_name)
+        self.output_file = open(self.output_file_name, 'w+')
         self.operate_on_file(backup_file_name, self.function_converter)
         self.output_file.close()
-        shutil.copyfile(output_file_name, temp_file_name)
+        shutil.copyfile(self.output_file_name, self.temp_file_name)
 
-        # Do pass #2 reading the new (copied to temp) file
-        self.output_file = open(output_file_name, 'w+')
-        self.operate_on_file(temp_file_name, self.declaration_converter)
+    def convert_forward_decl(self):
+        """
+        Read through self.temp_file_name created in `convert_func_decl` and
+        replace all incorrect forward declarations.
+        When this method returns, the final output file will be created
+        (with optional new extension or git mv).
+
+        For static functions, this method pulls data from self.function_dict.
+        For global functions, this method pulls data from
+        UnObsolizer.global_function_dict
+        """
+        self.output_file = open(self.output_file_name, 'w+')
+        self.operate_on_file(self.temp_file_name, self.declaration_converter)
         self.output_file.close()
-        os.remove(temp_file_name)
+        os.remove(self.temp_file_name)
         if UnObsolizer.new_extension:
-            os.remove(input_file_name)
+            os.remove(self.input_file_name)
             if UnObsolizer.git_move:
-                shutil.move(output_file_name, input_file_name)
+                shutil.move(self.output_file_name, self.input_file_name)
                 ret_val = subprocess.call(
-                    ['git', 'mv', input_file_name, output_file_name])
+                    ['git', 'mv', self.input_file_name, self.output_file_name])
                 if ret_val:
                     print('Fatal error while performing `git mv`. '
                           'Exiting')
@@ -242,10 +288,16 @@ class FileParser(object):
                 self.function_args_count = len(
                     func_name_match.group('args').split(','))
 
-            # Use 'void' if there is no return value
+            # Use 'int' if there is no return value
             ret_value_match = re.search(FileParser.return_value_re,
                                         self.previous_line)
-            if not ret_value_match:
+            if ret_value_match:
+                if ret_value_match.group('static'):
+                    self.function_is_global = False
+                else:
+                    self.function_is_global = True
+            else:
+                self.function_is_global = False
                 self.function_ret_type = 'int\n'
             self.function_name = func_name_match.group('name')
             if self.function_args_count is 0:
@@ -319,7 +371,10 @@ class FileParser(object):
                 self.output_file.writelines(self.accumulated_lines)
             else:
                 self.output_file.write(function_declaration)
-                self.function_dict[self.function_name] = self.function_args
+                if self.function_is_global:
+                    UnObsolizer.global_function_dict[self.function_name] = self.function_args
+                else:
+                    self.function_dict[self.function_name] = self.function_args
             self.output_file.write(line)
         elif re.search(FileParser.whitespace_re, line):
             return
@@ -361,7 +416,10 @@ class FileParser(object):
             # Ensure we have arguments for this forward declaration
             func_name = forward_decl_match.group('name')
             try:
-                args_tuple_list = self.function_dict[func_name]
+                if forward_decl_match.group('static'):
+                    args_tuple_list = self.function_dict[func_name]
+                else:
+                    args_tuple_list = UnObsolizer.global_function_dict[func_name]
             except KeyError:
                 self.output_file.write(line)
                 return
