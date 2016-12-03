@@ -1,6 +1,6 @@
 # un-obsolize
 
-A Python script to assist in removing obsolete (K&R) forward declarations and function definitions in C code. The K&R syntax is replaced with ANSI syntax.
+A Python script to assist in converting obsolete (K&R) forward declarations and function definitions in C code. The K&R syntax is replaced with ANSI syntax.
 
 Forward declarations and function defininitions can be located in separate files and conversion will still work, provided that the script is invoked on all relavant files.
 
